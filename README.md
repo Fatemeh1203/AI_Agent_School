@@ -68,7 +68,34 @@ INSERT INTO students (name, grade, class, parent_phone, unique_code) VALUES
    پیشنهادی: `Telegram Bot - هدف` (دقیقاً همین نام در فایل‌های JSON مرجع credential است؛ اگر
    نام دیگری گذاشتید، بعد از ایمپورت باید در نودهای مربوطه دوباره انتخابش کنید).
 
-## ۳) ایمپورت workflowها در n8n
+## ۳-الف) وضعیت استقرار فعلی (n8n Cloud)
+
+هر چهار workflow روی نمونه‌ی ابری `arezoo000.app.n8n.cloud` ساخته شده‌اند:
+
+| workflow | شناسه | لینک |
+|---|---|---|
+| WF-CORE | `wUQi023hO1sB8oTI` | https://arezoo000.app.n8n.cloud/workflow/wUQi023hO1sB8oTI |
+| WF-WEB | `xZOW8s72N3NFkCJA` | https://arezoo000.app.n8n.cloud/workflow/xZOW8s72N3NFkCJA |
+| WF-TELEGRAM | `m2vlruCUSKjCglN2` | https://arezoo000.app.n8n.cloud/workflow/m2vlruCUSKjCglN2 |
+| WF-SLA | `wPyj7aXqXETkISo7` | https://arezoo000.app.n8n.cloud/workflow/wPyj7aXqXETkISo7` |
+
+نودهای «فراخوانی CORE» در WF-WEB و WF-TELEGRAM از قبل به شناسه‌ی واقعی WF-CORE اشاره
+می‌کنند، پس نیازی به انتخاب دستی workflow نیست.
+
+**کارهای باقی‌مانده پیش از فعال‌سازی:**
+
+۱. **PostgreSQL** — روی n8n Cloud سروری برای نصب دیتابیس وجود ندارد، پس به یک PostgreSQL
+   بیرونی و قابل‌دسترس از اینترنت نیاز است (مثلاً Supabase، Neon، یا هر سرویس ابری دیگر).
+   بعد از ساخت آن، `schema.sql` و سپس `hadaf-school-content.sql` را روی آن اجرا کنید و یک
+   credential از نوع **Postgres** در n8n بسازید و به همه‌ی نودهای Postgres بدهید.
+۲. **نودهای HTTP Request** (ارسال پیام تلگرام، اعلان دفتر، پیام‌های SLA) هنگام ساخت
+   خودکار credential نگرفتند. در هر کدام باید Authentication را روی
+   «Predefined Credential Type» → «Telegram API» بگذارید و credential ربات را انتخاب کنید.
+۳. **credentialهای انتخاب‌شده‌ی خودکار را بررسی کنید**: n8n به Telegram Trigger کردنشیال
+   `Telegram account` و به Webhook کردنشیال `Header Auth account` را خودش وصل کرده است —
+   مطمئن شوید همان ربات و همان کلید موردنظر شماست.
+
+## ۳) ایمپورت workflowها در n8n (روش دستی، برای نصب خودمیزبان)
 
 هر ۴ فایل زیر پوشه‌ی `workflows/` را از منوی **Import from File** در n8n وارد کنید:
 `wf-core.json`، `wf-web.json`، `wf-telegram.json`، `wf-sla.json`.
