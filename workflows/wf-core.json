@@ -1,0 +1,975 @@
+{
+  "name": "WF-CORE — هسته‌ی منطق پاسخگویی و ثبت‌نام دبستان هدف",
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "ورودی CORE",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "channel"
+            },
+            {
+              "name": "channelUserId"
+            },
+            {
+              "name": "input"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n2",
+      "name": "نرمال‌سازی و اعتبارسنجی ورودی",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\nfunction normalizeFa(text) {\n  if (text === undefined || text === null) return '';\n  let s = String(text);\n  s = s.replace(/ي/g, 'ی').replace(/ك/g, 'ک');\n  s = s.replace(/[‌‏‎]/g, ' ');\n  const faDigits = '۰۱۲۳۴۵۶۷۸۹';\n  const arDigits = '٠١٢٣٤٥٦٧٨٩';\n  s = s.replace(/[۰-۹]/g, function (d) { return String(faDigits.indexOf(d)); });\n  s = s.replace(/[٠-٩]/g, function (d) { return String(arDigits.indexOf(d)); });\n  s = s.replace(/\\s+/g, ' ').trim();\n  return s;\n}\n\nconst item = $input.first().json;\nconst channel = item.channel;\nconst channelUserId = String(item.channelUserId || '');\nconst rawInput = item.input || {};\nconst inputType = rawInput.type === 'choice' ? 'choice' : 'text';\nconst rawValue = rawInput.value !== undefined ? rawInput.value : '';\nconst normalizedValue = inputType === 'text' ? normalizeFa(rawValue) : String(rawValue);\n\nif (!channel || !['telegram', 'web'].includes(channel) || !channelUserId) {\n  throw new Error('ورودی نامعتبر: channel یا channelUserId ناقص است');\n}\n\nreturn [{\n  json: {\n    channel: channel,\n    channelUserId: channelUserId,\n    input: { type: inputType, value: normalizedValue, rawValue: rawValue }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "n3",
+      "name": "خواندن مکالمه",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT state FROM conversations WHERE channel = $1 AND channel_user_id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.channel, $json.channelUserId] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n4",
+      "name": "خواندن تنظیمات",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM settings",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n5",
+      "name": "خواندن FAQ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, keywords, answer, menu_path, sort_order FROM faq ORDER BY sort_order",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n6",
+      "name": "تعیین نیاز به بررسی کد ولی",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\nconst normInput = $('نرمال‌سازی و اعتبارسنجی ورودی').first().json;\nconst convItem = $('خواندن مکالمه').first();\nconst convRow = convItem ? convItem.json : null;\nconst state = (convRow && convRow.state) || { step: 'main_menu' };\nconst pa = state.parentAuth || {};\nconst locked = pa.lockedUntil && new Date(pa.lockedUntil).getTime() > Date.now();\nconst needsLookup = state.step === 'parent_auth' && normInput.input.type === 'text' && !locked;\nreturn [{ json: { needsLookup: needsLookup } }];\n"
+      }
+    },
+    {
+      "id": "n7",
+      "name": "آیا بررسی کد ولی لازم است؟",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.needsLookup}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n7a",
+      "name": "جستجوی دانش‌آموز با کد",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, grade FROM students WHERE unique_code = $1",
+        "options": {
+          "queryReplacement": "={{ [$('نرمال‌سازی و اعتبارسنجی ورودی').first().json.input.value] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n8",
+      "name": "موتور تصمیم‌گیری نهایی",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\nfunction normalizeFa(text) {\n  if (text === undefined || text === null) return '';\n  let s = String(text);\n  s = s.replace(/ي/g, 'ی').replace(/ك/g, 'ک');\n  s = s.replace(/[‌‏‎]/g, ' ');\n  const faDigits = '۰۱۲۳۴۵۶۷۸۹';\n  const arDigits = '٠١٢٣٤٥٦٧٨٩';\n  s = s.replace(/[۰-۹]/g, function (d) { return String(faDigits.indexOf(d)); });\n  s = s.replace(/[٠-٩]/g, function (d) { return String(arDigits.indexOf(d)); });\n  s = s.replace(/\\s+/g, ' ').trim();\n  return s;\n}\n\nfunction genRef() {\n  const n = Math.floor(100000 + Math.random() * 900000);\n  return 'TCK-' + n;\n}\n\n// TODO: اگر مدیر می‌خواهد فهرست پایه‌ها را ویرایش کند، باید ستون ساختاریافته‌ای\n// برای پایه‌ها به schema اضافه شود؛ فعلاً چون در faq/settings مقدار ساختاریافته‌ای\n// برای پایه‌ها نیست، این فهرست ثابت (نه محتوای متنی مدرسه، بلکه گزینه‌های فرم) است.\nconst GRADE_OPTIONS = ['پیش‌دبستان', 'اول', 'دوم', 'سوم', 'چهارم', 'پنجم', 'ششم'];\nconst PARENT_CATEGORIES = ['مالی', 'آموزشی', 'انضباطی', 'مرخصی', 'سایر'];\nconst LOCK_MS = 60 * 60 * 1000;\n\nconst normInput = $('نرمال‌سازی و اعتبارسنجی ورودی').first().json;\nconst channel = normInput.channel;\nconst channelUserId = normInput.channelUserId;\nconst input = normInput.input;\n\nconst convRows = $('خواندن مکالمه').all();\nconst settingsRows = $('خواندن تنظیمات').all();\nconst faqRowsRaw = $('خواندن FAQ').all();\n\nconst readError = (convRows[0] && convRows[0].json && convRows[0].json.error) ||\n  (settingsRows[0] && settingsRows[0].json && settingsRows[0].json.error) ||\n  (faqRowsRaw[0] && faqRowsRaw[0].json && faqRowsRaw[0].json.error);\n\nconst settings = {};\nif (!(settingsRows[0] && settingsRows[0].json && settingsRows[0].json.error)) {\n  for (const r of settingsRows) { if (r.json && r.json.key) settings[r.json.key] = r.json.value; }\n}\nconst officePhone = settings.office_phone || 'دفتر مدرسه';\nconst settingsMeta = { schoolName: settings.school_name || '', officePhone: officePhone };\n\nif (readError) {\n  return [{ json: {\n    channel: channel, channelUserId: channelUserId,\n    reply: {\n      messages: ['در حال حاضر امکان پردازش درخواست شما نیست. لطفاً کمی بعد دوباره تلاش کنید یا با دفتر مدرسه تماس بگیرید: ' + officePhone],\n      choices: [], expectsInput: null\n    },\n    newState: null, action: 'skip_save', actionPayload: {}, settingsMeta: settingsMeta\n  } }];\n}\n\nconst faqRows = faqRowsRaw.filter(function (r) { return !r.json.error; }).map(function (r) { return r.json; });\nconst threshold = parseInt(settings.faq_match_threshold, 10) || 1;\n\nlet state = {};\nif (convRows.length && convRows[0].json && convRows[0].json.state) {\n  state = convRows[0].json.state;\n}\nif (!state || !state.step) state = { step: 'main_menu' };\n\nfunction buildMainMenuChoices() {\n  const menuFaq = faqRows\n    .filter(function (f) { return f.menu_path && f.menu_path.trim() !== ''; })\n    .sort(function (a, b) { return a.sort_order - b.sort_order; })\n    .map(function (f) { return { id: 'faq:' + f.id, label: f.menu_path }; });\n  return menuFaq.concat([\n    { id: 'ask_more', label: 'سؤال دیگری دارم' },\n    { id: 'parent_login', label: 'ورود اولیا (با کد رهگیری)' }\n  ]);\n}\n\nfunction matchFaq(text) {\n  const norm = normalizeFa(text);\n  let best = null, bestScore = 0;\n  for (const f of faqRows) {\n    let score = 0;\n    for (const kw of (f.keywords || [])) {\n      if (norm.includes(normalizeFa(kw))) score++;\n    }\n    if (score > bestScore) { bestScore = score; best = f; }\n  }\n  return { best: best, score: bestScore };\n}\n\nlet reply = { messages: [], choices: [], expectsInput: null };\nlet action = 'none';\nlet actionPayload = {};\nlet newState = state;\n\nconst step = state.step;\n\nif (step === 'main_menu') {\n  if (input.type === 'choice' && input.value === 'show_menu') {\n    reply.messages = [settings.motto || ('به سامانه‌ی پاسخگویی ' + (settings.school_name || 'دبستان هدف') + ' خوش آمدید.')];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n\n  } else if (input.type === 'choice' && input.value === 'ask_more') {\n    reply.messages = ['سؤال خود را بنویسید.'];\n    reply.choices = [];\n    reply.expectsInput = { type: 'text', field: 'main_menu.free_text' };\n    newState = { step: 'main_menu' };\n\n  } else if (input.type === 'choice' && input.value === 'parent_login') {\n    reply.messages = ['کد رهگیری اختصاصی فرزندتان را وارد کنید.'];\n    reply.choices = [];\n    reply.expectsInput = { type: 'text', field: 'parent_auth.code' };\n    newState = { step: 'parent_auth', parentAuth: { attempts: 0, lockedUntil: null, studentId: null } };\n\n  } else if (input.type === 'choice' && input.value === 'start_registration') {\n    reply.messages = ['پایه‌ی تحصیلی فرزندتان را انتخاب کنید.'];\n    reply.choices = GRADE_OPTIONS.map(function (g) { return { id: 'grade:' + g, label: g }; });\n    reply.expectsInput = { type: 'choice', field: 'registration.grade' };\n    newState = { step: 'registration', registration: { stage: 'grade', data: {} } };\n\n  } else if (input.type === 'choice' && input.value.indexOf('faq:') === 0) {\n    const id = parseInt(input.value.split(':')[1], 10);\n    const faq = faqRows.find(function (f) { return f.id === id; });\n    if (faq) {\n      reply.messages = [faq.answer];\n      reply.choices = faq.menu_path === 'ثبت‌نام'\n        ? [{ id: 'start_registration', label: 'شروع ثبت‌نام' }, { id: 'show_menu', label: 'بازگشت به منو' }]\n        : [{ id: 'show_menu', label: 'بازگشت به منو' }];\n    } else {\n      reply.messages = ['موردی یافت نشد.'];\n      reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n    }\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n\n  } else if (input.type === 'text' && input.value) {\n    const m = matchFaq(input.value);\n    if (m.best && m.score >= threshold) {\n      reply.messages = [m.best.answer];\n      reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n      reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    } else {\n      const ref = genRef();\n      reply.messages = ['پاسخ آماده‌ای برای این سؤال نداریم. درخواست شما با کد پیگیری ' + ref + ' ثبت شد و همکاران ما پاسخ خواهند داد.'];\n      reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n      reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n      action = 'insert_ticket_free';\n      actionPayload = { channel: channel, channelUserId: channelUserId, body: (input.rawValue !== undefined ? input.rawValue : input.value), publicRef: ref };\n    }\n    newState = { step: 'main_menu' };\n\n  } else {\n    reply.messages = ['متوجه نشدم. یکی از گزینه‌ها را انتخاب کنید یا سؤالتان را بنویسید.'];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n  }\n\n} else if (step === 'registration') {\n  const reg = state.registration || { stage: 'grade', data: {} };\n\n  if (input.type === 'choice' && input.value === 'show_menu') {\n    reply.messages = ['به منوی اصلی بازگشتید.'];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n\n  } else if (reg.stage === 'grade') {\n    if (input.type === 'choice' && input.value.indexOf('grade:') === 0) {\n      reg.data.grade = input.value.split(':')[1];\n      reg.stage = 'student_name';\n      reply.messages = ['نام و نام خانوادگی دانش‌آموز را بنویسید.'];\n      reply.expectsInput = { type: 'text', field: 'registration.student_name' };\n    } else {\n      reply.messages = ['لطفاً یکی از پایه‌های زیر را انتخاب کنید.'];\n      reply.choices = GRADE_OPTIONS.map(function (g) { return { id: 'grade:' + g, label: g }; });\n      reply.expectsInput = { type: 'choice', field: 'registration.grade' };\n    }\n    newState = { step: 'registration', registration: reg };\n\n  } else if (reg.stage === 'student_name') {\n    if (input.type === 'text' && input.value) {\n      reg.data.student_name = input.value;\n      reg.stage = 'parent_name';\n      reply.messages = ['نام و نام خانوادگی ولی را بنویسید.'];\n      reply.expectsInput = { type: 'text', field: 'registration.parent_name' };\n    } else {\n      reply.messages = ['نام دانش‌آموز را بنویسید.'];\n      reply.expectsInput = { type: 'text', field: 'registration.student_name' };\n    }\n    newState = { step: 'registration', registration: reg };\n\n  } else if (reg.stage === 'parent_name') {\n    if (input.type === 'text' && input.value) {\n      reg.data.parent_name = input.value;\n      reg.stage = 'phone';\n      reply.messages = ['شماره موبایل خود را وارد کنید (مثال: 09123456789).'];\n      reply.expectsInput = { type: 'text', field: 'registration.phone' };\n    } else {\n      reply.messages = ['نام ولی را بنویسید.'];\n      reply.expectsInput = { type: 'text', field: 'registration.parent_name' };\n    }\n    newState = { step: 'registration', registration: reg };\n\n  } else if (reg.stage === 'phone') {\n    const digits = normalizeFa(input.value || '');\n    if (input.type === 'text' && /^09\\d{9}$/.test(digits)) {\n      reg.data.phone = digits;\n      reg.stage = 'note';\n      reply.messages = ['اگر توضیح خاصی دارید بنویسید، یا رد شوید.'];\n      reply.choices = [{ id: 'skip_note', label: 'ندارم' }];\n      reply.expectsInput = { type: 'text', field: 'registration.note' };\n    } else {\n      reply.messages = ['شماره موبایل نامعتبر است. شماره را به شکل 09xxxxxxxxx وارد کنید.'];\n      reply.expectsInput = { type: 'text', field: 'registration.phone' };\n    }\n    newState = { step: 'registration', registration: reg };\n\n  } else if (reg.stage === 'note') {\n    if (input.type === 'choice' && input.value === 'skip_note') {\n      reg.data.note = null;\n    } else if (input.type === 'text') {\n      reg.data.note = input.value || null;\n    }\n    reg.stage = 'summary';\n    reply.messages = [\n      'خلاصه‌ی ثبت‌نام:',\n      'پایه: ' + reg.data.grade,\n      'نام دانش‌آموز: ' + reg.data.student_name,\n      'نام ولی: ' + reg.data.parent_name,\n      'موبایل: ' + reg.data.phone,\n      'توضیح: ' + (reg.data.note || '—')\n    ];\n    reply.choices = [{ id: 'confirm_registration', label: 'تأیید و ثبت' }, { id: 'edit_registration', label: 'ویرایش از نو' }];\n    reply.expectsInput = { type: 'choice', field: 'registration.confirm' };\n    newState = { step: 'registration', registration: reg };\n\n  } else if (reg.stage === 'summary') {\n    if (input.type === 'choice' && input.value === 'confirm_registration') {\n      reply.messages = ['ثبت‌نام شما با موفقیت ثبت شد. دفتر مدرسه به‌زودی با شما تماس می‌گیرد.'];\n      reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n      reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n      action = 'insert_lead';\n      actionPayload = Object.assign({}, reg.data, { channel: channel });\n      newState = { step: 'main_menu' };\n    } else if (input.type === 'choice' && input.value === 'edit_registration') {\n      reply.messages = ['پایه‌ی تحصیلی فرزندتان را دوباره انتخاب کنید.'];\n      reply.choices = GRADE_OPTIONS.map(function (g) { return { id: 'grade:' + g, label: g }; });\n      reply.expectsInput = { type: 'choice', field: 'registration.grade' };\n      newState = { step: 'registration', registration: { stage: 'grade', data: {} } };\n    } else {\n      reply.messages = ['لطفاً تأیید یا ویرایش را انتخاب کنید.'];\n      reply.choices = [{ id: 'confirm_registration', label: 'تأیید و ثبت' }, { id: 'edit_registration', label: 'ویرایش از نو' }];\n      reply.expectsInput = { type: 'choice', field: 'registration.confirm' };\n      newState = { step: 'registration', registration: reg };\n    }\n  }\n\n} else if (step === 'parent_auth') {\n  const pa = state.parentAuth || { attempts: 0, lockedUntil: null, studentId: null };\n\n  if (input.type === 'choice' && input.value === 'show_menu') {\n    reply.messages = ['به منوی اصلی بازگشتید.'];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n\n  } else if (pa.lockedUntil && new Date(pa.lockedUntil).getTime() > Date.now()) {\n    reply.messages = ['به دلیل ورود اشتباه مکرر، امکان تلاش مجدد وجود ندارد. لطفاً بعداً تلاش کنید یا با دفتر تماس بگیرید: ' + officePhone];\n    reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n    reply.expectsInput = { type: 'text', field: 'parent_auth.code' };\n    newState = { step: 'parent_auth', parentAuth: pa };\n\n  } else {\n    let student = null;\n    try {\n      const rows = $('جستجوی دانش‌آموز با کد').all();\n      if (rows.length && !rows[0].json.error && rows[0].json.id) student = rows[0].json;\n    } catch (e) { student = null; }\n\n    if (student) {\n      reply.messages = ['خوش آمدید. دسته‌ی مورد نظر برای ثبت درخواست را انتخاب کنید.'];\n      reply.choices = PARENT_CATEGORIES.map(function (c) { return { id: 'cat:' + c, label: c }; }).concat([{ id: 'show_menu', label: 'بازگشت به منوی اصلی' }]);\n      reply.expectsInput = { type: 'choice', field: 'parent_menu.category' };\n      action = 'verify_parent_success';\n      actionPayload = { channel: channel, channelUserId: channelUserId, studentId: student.id };\n      newState = { step: 'parent_menu', parentAuth: { attempts: 0, lockedUntil: null, studentId: student.id } };\n    } else {\n      const attempts = (pa.attempts || 0) + 1;\n      if (attempts >= 3) {\n        newState = { step: 'parent_auth', parentAuth: { attempts: 0, lockedUntil: new Date(Date.now() + LOCK_MS).toISOString(), studentId: null } };\n        reply.messages = ['کد وارد شده صحیح نیست. به دلیل سه بار ورود نادرست، تا یک ساعت دیگر امکان تلاش مجدد نیست.'];\n      } else {\n        newState = { step: 'parent_auth', parentAuth: { attempts: attempts, lockedUntil: null, studentId: null } };\n        reply.messages = ['کد وارد شده صحیح نیست. دوباره تلاش کنید.'];\n      }\n      reply.choices = [{ id: 'show_menu', label: 'بازگشت به منو' }];\n      reply.expectsInput = { type: 'text', field: 'parent_auth.code' };\n    }\n  }\n\n} else if (step === 'parent_menu') {\n  if (input.type === 'choice' && input.value === 'show_menu') {\n    reply.messages = ['به منوی اصلی بازگشتید.'];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n  } else if (input.type === 'choice' && input.value.indexOf('cat:') === 0) {\n    const category = input.value.split(':')[1];\n    reply.messages = ['متن درخواست خود را بنویسید.'];\n    reply.expectsInput = { type: 'text', field: 'parent_ticket.body' };\n    newState = { step: 'parent_ticket', parentAuth: state.parentAuth, parentTicket: { category: category } };\n  } else {\n    reply.messages = ['دسته‌ی مورد نظر را انتخاب کنید.'];\n    reply.choices = PARENT_CATEGORIES.map(function (c) { return { id: 'cat:' + c, label: c }; }).concat([{ id: 'show_menu', label: 'بازگشت به منوی اصلی' }]);\n    reply.expectsInput = { type: 'choice', field: 'parent_menu.category' };\n    newState = { step: 'parent_menu', parentAuth: state.parentAuth };\n  }\n\n} else if (step === 'parent_ticket') {\n  if (input.type === 'choice' && input.value === 'show_menu') {\n    reply.messages = ['به منوی اصلی بازگشتید.'];\n    reply.choices = buildMainMenuChoices();\n    reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n    newState = { step: 'main_menu' };\n  } else if (input.type === 'text' && input.value) {\n    const ref = genRef();\n    action = 'insert_ticket_parent';\n    actionPayload = {\n      channel: channel, channelUserId: channelUserId,\n      studentId: (state.parentAuth && state.parentAuth.studentId) || null,\n      category: (state.parentTicket && state.parentTicket.category) || 'سایر',\n      body: (input.rawValue !== undefined ? input.rawValue : input.value),\n      publicRef: ref\n    };\n    reply.messages = ['درخواست شما ثبت شد. کد پیگیری: ' + ref];\n    reply.choices = PARENT_CATEGORIES.map(function (c) { return { id: 'cat:' + c, label: c }; }).concat([{ id: 'show_menu', label: 'بازگشت به منوی اصلی' }]);\n    reply.expectsInput = { type: 'choice', field: 'parent_menu.category' };\n    newState = { step: 'parent_menu', parentAuth: state.parentAuth };\n  } else {\n    reply.messages = ['متن درخواست را بنویسید.'];\n    reply.expectsInput = { type: 'text', field: 'parent_ticket.body' };\n    newState = { step: 'parent_ticket', parentAuth: state.parentAuth, parentTicket: state.parentTicket };\n  }\n\n} else {\n  reply.messages = ['به منوی اصلی بازگشتید.'];\n  reply.choices = buildMainMenuChoices();\n  reply.expectsInput = { type: 'choice', field: 'main_menu.choice' };\n  newState = { step: 'main_menu' };\n}\n\nreturn [{ json: {\n  channel: channel, channelUserId: channelUserId,\n  reply: reply, newState: newState, action: action, actionPayload: actionPayload,\n  settingsMeta: settingsMeta\n} }];\n"
+      }
+    },
+    {
+      "id": "n9",
+      "name": "اجرای اثر جانبی",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "insert_lead",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "insert_lead"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "insert_ticket_free",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "insert_ticket_free"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "insert_ticket_parent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "insert_ticket_parent"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "verify_parent_success",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "verify_parent_success"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "skip_save",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "skip_save"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "n10a",
+      "name": "ثبت سرنخ (leads)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2200,
+        -300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (student_name, grade, parent_name, phone, note, channel) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.student_name, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.grade, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.parent_name, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.phone, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.note, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channel] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n10b",
+      "name": "ثبت مرحله ثبت‌نام (registrations)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2420,
+        -300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO registrations (lead_id, step, payload, completed_at) VALUES ($1, 'completed', $2, now())",
+        "options": {
+          "queryReplacement": "={{ [$json.id, JSON.stringify($('موتور تصمیم‌گیری نهایی').first().json.actionPayload)] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n10c",
+      "name": "یافتن چت آیدی دفتر",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        -300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT telegram_chat_id FROM staff WHERE category = 'مدیر' AND telegram_chat_id IS NOT NULL ORDER BY id LIMIT 1) AS telegram_chat_id",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n10d",
+      "name": "آیا چت آیدی دفتر موجود است؟",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$json.telegram_chat_id }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n10e",
+      "name": "اعلان فوری ثبت‌نام به دفتر",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        -380
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $credentials.telegramApi.accessToken + \"/sendMessage\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $json.telegram_chat_id, text: \"ثبت‌نام جدید:\\nپایه: \" + $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.grade + \"\\nدانش‌آموز: \" + $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.student_name + \"\\nولی: \" + $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.parent_name + \"\\nموبایل: \" + $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.phone }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Telegram Bot - هدف"
+        }
+      }
+    },
+    {
+      "id": "n11a",
+      "name": "ثبت در پرسش‌های بی‌پاسخ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2200,
+        -100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO unanswered (channel, channel_user_id, text) VALUES ($1,$2,$3)",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channel, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channelUserId, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.body] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n11b",
+      "name": "ساخت تیکت سؤال آزاد",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2420,
+        -100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tickets (channel, channel_user_id, category, body, status, public_ref) VALUES ($1,$2,'سوال_آزاد',$3,'open',$4) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channel, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channelUserId, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.body, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.publicRef] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n11c",
+      "name": "ثبت پیام تیکت آزاد",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        -100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (ticket_id, direction, body) VALUES ($1,'in',$2)",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.body] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n12a",
+      "name": "یافتن کارشناس دسته",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT id FROM staff WHERE category = $1 ORDER BY id LIMIT 1) AS id",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.category] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n12b",
+      "name": "ساخت تیکت اولیا",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2420,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tickets (student_id, channel, channel_user_id, category, body, status, assignee_id, public_ref) VALUES ($1,$2,$3,$4,$5,'open',$6,$7) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.studentId, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channel, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channelUserId, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.category, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.body, $json.id, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.publicRef] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n12c",
+      "name": "ثبت پیام تیکت اولیا",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (ticket_id, direction, body) VALUES ($1,'in',$2)",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.body] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n13a",
+      "name": "ثبت تأیید هویت ولی",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2200,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO parents (student_id, channel, channel_user_id, verified_at) VALUES ($1,$2,$3, now()) ON CONFLICT (channel, channel_user_id, student_id) DO UPDATE SET verified_at = now()",
+        "options": {
+          "queryReplacement": "={{ [$('موتور تصمیم‌گیری نهایی').first().json.actionPayload.studentId, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channel, $('موتور تصمیم‌گیری نهایی').first().json.actionPayload.channelUserId] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n14",
+      "name": "ذخیره وضعیت مکالمه",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2880,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (channel, channel_user_id, state, updated_at) VALUES ($1,$2,$3, now()) ON CONFLICT (channel, channel_user_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()",
+        "options": {
+          "queryReplacement": "={{ [$('نرمال‌سازی و اعتبارسنجی ورودی').first().json.channel, $('نرمال‌سازی و اعتبارسنجی ورودی').first().json.channelUserId, JSON.stringify($('موتور تصمیم‌گیری نهایی').first().json.newState)] }}"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      }
+    },
+    {
+      "id": "n15",
+      "name": "ساخت خروجی نهایی CORE",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        0
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\nconst decision = $('موتور تصمیم‌گیری نهایی').first().json;\n\nlet convError = null;\ntry {\n  const convRes = $('ذخیره وضعیت مکالمه').first().json;\n  if (convRes && convRes.error) convError = convRes.error;\n} catch (e) { /* اگر شاخه‌ی skip_save بوده، این نود اصلاً اجرا نشده است */ }\n\nif (convError) {\n  return [{ json: {\n    messages: ['خطایی در ذخیره‌سازی اطلاعات رخ داد. لطفاً دوباره تلاش کنید یا با دفتر تماس بگیرید: ' + (decision.settingsMeta ? decision.settingsMeta.officePhone : '')],\n    choices: [], expectsInput: null,\n    meta: decision.settingsMeta\n  } }];\n}\n\nreturn [{ json: Object.assign({}, decision.reply, { meta: decision.settingsMeta }) }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "ورودی CORE": {
+      "main": [
+        [
+          {
+            "node": "نرمال‌سازی و اعتبارسنجی ورودی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "نرمال‌سازی و اعتبارسنجی ورودی": {
+      "main": [
+        [
+          {
+            "node": "خواندن مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "خواندن مکالمه": {
+      "main": [
+        [
+          {
+            "node": "خواندن تنظیمات",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "خواندن تنظیمات": {
+      "main": [
+        [
+          {
+            "node": "خواندن FAQ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "خواندن FAQ": {
+      "main": [
+        [
+          {
+            "node": "تعیین نیاز به بررسی کد ولی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "تعیین نیاز به بررسی کد ولی": {
+      "main": [
+        [
+          {
+            "node": "آیا بررسی کد ولی لازم است؟",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "آیا بررسی کد ولی لازم است؟": {
+      "main": [
+        [
+          {
+            "node": "جستجوی دانش‌آموز با کد",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "موتور تصمیم‌گیری نهایی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "جستجوی دانش‌آموز با کد": {
+      "main": [
+        [
+          {
+            "node": "موتور تصمیم‌گیری نهایی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "موتور تصمیم‌گیری نهایی": {
+      "main": [
+        [
+          {
+            "node": "اجرای اثر جانبی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "اجرای اثر جانبی": {
+      "main": [
+        [
+          {
+            "node": "ثبت سرنخ (leads)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ثبت در پرسش‌های بی‌پاسخ",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "یافتن کارشناس دسته",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ثبت تأیید هویت ولی",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ساخت خروجی نهایی CORE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت سرنخ (leads)": {
+      "main": [
+        [
+          {
+            "node": "ثبت مرحله ثبت‌نام (registrations)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت مرحله ثبت‌نام (registrations)": {
+      "main": [
+        [
+          {
+            "node": "یافتن چت آیدی دفتر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن چت آیدی دفتر": {
+      "main": [
+        [
+          {
+            "node": "آیا چت آیدی دفتر موجود است؟",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "آیا چت آیدی دفتر موجود است؟": {
+      "main": [
+        [
+          {
+            "node": "اعلان فوری ثبت‌نام به دفتر",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "اعلان فوری ثبت‌نام به دفتر": {
+      "main": [
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت در پرسش‌های بی‌پاسخ": {
+      "main": [
+        [
+          {
+            "node": "ساخت تیکت سؤال آزاد",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ساخت تیکت سؤال آزاد": {
+      "main": [
+        [
+          {
+            "node": "ثبت پیام تیکت آزاد",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت پیام تیکت آزاد": {
+      "main": [
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن کارشناس دسته": {
+      "main": [
+        [
+          {
+            "node": "ساخت تیکت اولیا",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ساخت تیکت اولیا": {
+      "main": [
+        [
+          {
+            "node": "ثبت پیام تیکت اولیا",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت پیام تیکت اولیا": {
+      "main": [
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ثبت تأیید هویت ولی": {
+      "main": [
+        [
+          {
+            "node": "ذخیره وضعیت مکالمه",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ذخیره وضعیت مکالمه": {
+      "main": [
+        [
+          {
+            "node": "ساخت خروجی نهایی CORE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
