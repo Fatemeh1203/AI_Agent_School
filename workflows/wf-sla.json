@@ -1,0 +1,533 @@
+{
+  "name": "WF-SLA — یادآوری، هشدار و گزارش هفتگی",
+  "nodes": [
+    {
+      "id": "بررسی ساعتی SLA",
+      "name": "بررسی ساعتی SLA",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "یافتن تیکت‌های ۴ ساعته بی‌پاسخ",
+      "name": "یافتن تیکت‌های ۴ ساعته بی‌پاسخ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        -100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id, t.public_ref, t.category, t.created_at, s.telegram_chat_id, s.name AS staff_name FROM tickets t LEFT JOIN staff s ON s.id = t.assignee_id WHERE t.status = 'open' AND t.first_reply_at IS NULL AND t.created_at <= now() - interval '4 hours' AND t.created_at > now() - interval '5 hours'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "ساخت پیام یادآوری ۴ساعته",
+      "name": "ساخت پیام یادآوری ۴ساعته",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        -100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\n// از تقویم فارسی داخلی موتور Node.js (Intl، با ICU کامل) استفاده می‌شود تا از\n// خطای محاسبه‌ی دستی تاریخ شمسی (به‌خصوص نزدیک نوروز) جلوگیری شود.\n// نیازمند Node.js با ICU کامل است (پیش‌فرض نسخه‌های رسمی nodejs.org از v13 به بعد).\nconst jalaliFormatter = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {\n  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false\n});\nfunction toJalaliString(date) {\n  return jalaliFormatter.format(new Date(date));\n}\n\nconst row = $json;\nif (!row || row.error || !row.telegram_chat_id) return [];\nconst text = 'یادآوری: تیکت ' + row.public_ref + ' (دسته: ' + row.category + ') از ' +\n  toJalaliString(row.created_at) + ' بدون پاسخ مانده است.';\nreturn [{ json: { chat_id: row.telegram_chat_id, text: text } }];\n"
+      }
+    },
+    {
+      "id": "ارسال یادآوری ۴ساعته به مسئول",
+      "name": "ارسال یادآوری ۴ساعته به مسئول",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $credentials.telegramApi.accessToken + \"/sendMessage\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $json.chat_id, text: $json.text }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Telegram Bot - هدف"
+        }
+      }
+    },
+    {
+      "id": "یافتن تیکت‌های ۲۴ ساعته بی‌پاسخ",
+      "name": "یافتن تیکت‌های ۲۴ ساعته بی‌پاسخ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id, t.public_ref, t.category, t.created_at FROM tickets t WHERE t.status = 'open' AND t.first_reply_at IS NULL AND t.created_at <= now() - interval '24 hours' AND t.created_at > now() - interval '25 hours'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "یافتن چت آیدی مدیر",
+      "name": "یافتن چت آیدی مدیر",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT telegram_chat_id FROM staff WHERE category = 'مدیر' AND telegram_chat_id IS NOT NULL ORDER BY id LIMIT 1",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "ساخت پیام هشدار ۲۴ساعته",
+      "name": "ساخت پیام هشدار ۲۴ساعته",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\n// از تقویم فارسی داخلی موتور Node.js (Intl، با ICU کامل) استفاده می‌شود تا از\n// خطای محاسبه‌ی دستی تاریخ شمسی (به‌خصوص نزدیک نوروز) جلوگیری شود.\n// نیازمند Node.js با ICU کامل است (پیش‌فرض نسخه‌های رسمی nodejs.org از v13 به بعد).\nconst jalaliFormatter = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {\n  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false\n});\nfunction toJalaliString(date) {\n  return jalaliFormatter.format(new Date(date));\n}\n\nconst ticket = $('یافتن تیکت‌های ۲۴ ساعته بی‌پاسخ').first().json;\nconst adminRows = $('یافتن چت آیدی مدیر').all();\nif (!ticket || ticket.error || !adminRows.length || adminRows[0].json.error || !adminRows[0].json.telegram_chat_id) return [];\nconst text = 'هشدار: تیکت ' + ticket.public_ref + ' (دسته: ' + ticket.category + ') از ' +\n  toJalaliString(ticket.created_at) + ' پس از ۲۴ ساعت هنوز بدون پاسخ است.';\nreturn [{ json: { chat_id: adminRows[0].json.telegram_chat_id, text: text } }];\n"
+      }
+    },
+    {
+      "id": "ارسال هشدار ۲۴ساعته به مدیر",
+      "name": "ارسال هشدار ۲۴ساعته به مدیر",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $credentials.telegramApi.accessToken + \"/sendMessage\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $json.chat_id, text: $json.text }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Telegram Bot - هدف"
+        }
+      }
+    },
+    {
+      "id": "زمان‌بند گزارش هفتگی",
+      "name": "زمان‌بند گزارش هفتگی",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        350
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 4"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "آمار تیکت به تفکیک دسته",
+      "name": "آمار تیکت به تفکیک دسته",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT category, count(*) AS total FROM tickets WHERE created_at >= now() - interval '7 days' GROUP BY category ORDER BY total DESC",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "میانگین زمان اولین پاسخ هر واحد",
+      "name": "میانگین زمان اولین پاسخ هر واحد",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT category, avg(first_reply_at - created_at) AS avg_reply FROM tickets WHERE first_reply_at IS NOT NULL AND created_at >= now() - interval '7 days' GROUP BY category",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "تعداد تیکت‌های باز",
+      "name": "تعداد تیکت‌های باز",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        500
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS open_count FROM tickets WHERE status = 'open'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "پرتکرارترین سؤال‌های بی‌پاسخ",
+      "name": "پرتکرارترین سؤال‌های بی‌پاسخ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        600
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT text, count(*) AS freq FROM unanswered WHERE created_at >= now() - interval '7 days' GROUP BY text ORDER BY freq DESC LIMIT 5",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "یافتن چت آیدی مدیر برای گزارش",
+      "name": "یافتن چت آیدی مدیر برای گزارش",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        700
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT telegram_chat_id FROM staff WHERE category = 'مدیر' AND telegram_chat_id IS NOT NULL ORDER BY id LIMIT 1",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CRED_ID",
+          "name": "Postgres - دبستان هدف"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "ساخت متن گزارش هفتگی",
+      "name": "ساخت متن گزارش هفتگی",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        500
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "\n// از تقویم فارسی داخلی موتور Node.js (Intl، با ICU کامل) استفاده می‌شود تا از\n// خطای محاسبه‌ی دستی تاریخ شمسی (به‌خصوص نزدیک نوروز) جلوگیری شود.\n// نیازمند Node.js با ICU کامل است (پیش‌فرض نسخه‌های رسمی nodejs.org از v13 به بعد).\nconst jalaliFormatter = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {\n  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false\n});\nfunction toJalaliString(date) {\n  return jalaliFormatter.format(new Date(date));\n}\n\nfunction fmtInterval(pgInterval) {\n  if (!pgInterval) return 'نامشخص';\n  if (typeof pgInterval === 'string') return pgInterval;\n  const h = pgInterval.hours || 0;\n  const m = pgInterval.minutes || 0;\n  const d = pgInterval.days || 0;\n  return (d ? d + ' روز و ' : '') + h + ' ساعت و ' + m + ' دقیقه';\n}\n\nconst byCat = $('آمار تیکت به تفکیک دسته').all().filter(function (r) { return !r.json.error; }).map(function (r) { return r.json; });\nconst avgReply = $('میانگین زمان اولین پاسخ هر واحد').all().filter(function (r) { return !r.json.error; }).map(function (r) { return r.json; });\nconst openRows = $('تعداد تیکت‌های باز').all();\nconst openCount = (openRows.length && !openRows[0].json.error) ? openRows[0].json.open_count : 'نامشخص';\nconst topUnanswered = $('پرتکرارترین سؤال‌های بی‌پاسخ').all().filter(function (r) { return !r.json.error; }).map(function (r) { return r.json; });\nconst adminRows = $('یافتن چت آیدی مدیر برای گزارش').all();\n\nif (!adminRows.length || adminRows[0].json.error || !adminRows[0].json.telegram_chat_id) return [];\n\nconst lines = [];\nlines.push('گزارش هفتگی — تا ' + toJalaliString(new Date()));\nlines.push('');\nlines.push('تعداد تیکت به تفکیک دسته:');\nif (byCat.length) {\n  byCat.forEach(function (r) { lines.push('- ' + r.category + ': ' + r.total); });\n} else {\n  lines.push('- موردی ثبت نشده است.');\n}\nlines.push('');\nlines.push('میانگین زمان اولین پاسخ هر واحد:');\nif (avgReply.length) {\n  avgReply.forEach(function (r) { lines.push('- ' + r.category + ': ' + fmtInterval(r.avg_reply)); });\n} else {\n  lines.push('- داده‌ای موجود نیست.');\n}\nlines.push('');\nlines.push('تعداد تیکت‌های باز: ' + openCount);\nlines.push('');\nlines.push('۵ سؤال پرتکرار بدون پاسخ:');\nif (topUnanswered.length) {\n  topUnanswered.forEach(function (r) { lines.push('- ' + r.text + ' (' + r.freq + ' بار)'); });\n} else {\n  lines.push('- موردی ثبت نشده است.');\n}\n\nreturn [{ json: { chat_id: adminRows[0].json.telegram_chat_id, text: lines.join('\\n') } }];\n"
+      }
+    },
+    {
+      "id": "ارسال گزارش هفتگی به مدیر",
+      "name": "ارسال گزارش هفتگی به مدیر",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $credentials.telegramApi.accessToken + \"/sendMessage\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $json.chat_id, text: $json.text }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Telegram Bot - هدف"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "بررسی ساعتی SLA": {
+      "main": [
+        [
+          {
+            "node": "یافتن تیکت‌های ۴ ساعته بی‌پاسخ",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "یافتن تیکت‌های ۲۴ ساعته بی‌پاسخ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن تیکت‌های ۴ ساعته بی‌پاسخ": {
+      "main": [
+        [
+          {
+            "node": "ساخت پیام یادآوری ۴ساعته",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ساخت پیام یادآوری ۴ساعته": {
+      "main": [
+        [
+          {
+            "node": "ارسال یادآوری ۴ساعته به مسئول",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن تیکت‌های ۲۴ ساعته بی‌پاسخ": {
+      "main": [
+        [
+          {
+            "node": "یافتن چت آیدی مدیر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن چت آیدی مدیر": {
+      "main": [
+        [
+          {
+            "node": "ساخت پیام هشدار ۲۴ساعته",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ساخت پیام هشدار ۲۴ساعته": {
+      "main": [
+        [
+          {
+            "node": "ارسال هشدار ۲۴ساعته به مدیر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "زمان‌بند گزارش هفتگی": {
+      "main": [
+        [
+          {
+            "node": "آمار تیکت به تفکیک دسته",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "میانگین زمان اولین پاسخ هر واحد",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "تعداد تیکت‌های باز",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "پرتکرارترین سؤال‌های بی‌پاسخ",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "یافتن چت آیدی مدیر برای گزارش",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "آمار تیکت به تفکیک دسته": {
+      "main": [
+        [
+          {
+            "node": "ساخت متن گزارش هفتگی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "میانگین زمان اولین پاسخ هر واحد": {
+      "main": [
+        [
+          {
+            "node": "ساخت متن گزارش هفتگی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "تعداد تیکت‌های باز": {
+      "main": [
+        [
+          {
+            "node": "ساخت متن گزارش هفتگی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "پرتکرارترین سؤال‌های بی‌پاسخ": {
+      "main": [
+        [
+          {
+            "node": "ساخت متن گزارش هفتگی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "یافتن چت آیدی مدیر برای گزارش": {
+      "main": [
+        [
+          {
+            "node": "ساخت متن گزارش هفتگی",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ساخت متن گزارش هفتگی": {
+      "main": [
+        [
+          {
+            "node": "ارسال گزارش هفتگی به مدیر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "a036a5a2-bded-4a18-9bf5-66b8a99744c4"
+}

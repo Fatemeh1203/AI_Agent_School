@@ -1,0 +1,23 @@
+version: "3.8"
+
+# پنل ویرایش محتوا برای دبستان هدف — فقط دسترسی به جدول‌های faq و settings.
+# این کانتینر به همان PostgreSQL موجود روی سرور وصل می‌شود (سرویس جدا نیست).
+# قبل از اجرا مقادیر NC_DB و NC_AUTH_JWT_SECRET را در فایل .env کنار همین فایل تنظیم کنید
+# (نمونه در .env.example).
+
+services:
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: hadaf-nocodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8080"   # فقط روی لوکال‌هاست؛ دسترسی از بیرون از طریق ریورس‌پراکسی با HTTPS
+    environment:
+      NC_DB: ${NC_DB}
+      NC_AUTH_JWT_SECRET: ${NC_AUTH_JWT_SECRET}
+      NC_DISABLE_TELE: "true"
+    volumes:
+      - nocodb_data:/usr/app/data
+
+volumes:
+  nocodb_data:
