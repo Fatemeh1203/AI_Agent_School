@@ -84,10 +84,40 @@ INSERT INTO students (name, grade, class, parent_phone, unique_code) VALUES
 
 **کارهای باقی‌مانده پیش از فعال‌سازی:**
 
-۱. **PostgreSQL** — روی n8n Cloud سروری برای نصب دیتابیس وجود ندارد، پس به یک PostgreSQL
-   بیرونی و قابل‌دسترس از اینترنت نیاز است (مثلاً Supabase، Neon، یا هر سرویس ابری دیگر).
-   بعد از ساخت آن، `schema.sql` و سپس `hadaf-school-content.sql` را روی آن اجرا کنید و یک
-   credential از نوع **Postgres** در n8n بسازید و به همه‌ی نودهای Postgres بدهید.
+۱. **PostgreSQL — ساخته شد (Supabase)**
+
+   چون روی n8n Cloud سروری برای نصب دیتابیس وجود ندارد، دیتابیس روی Supabase ساخته شد:
+
+   - نام پروژه: `hadaf-school`
+   - شناسه (ref): `blehwjzrnroryrljklna`
+   - منطقه: `eu-central-1`
+   - داشبورد: https://supabase.com/dashboard/project/blehwjzrnroryrljklna
+
+   `schema.sql` و `hadaf-school-content.sql` روی آن اجرا شده‌اند: ۱۲ جدول، ۱۱ ردیف
+   `settings` و ۱۵ ردیف `faq` (۵ ردیف دارای `menu_path` که دکمه‌های منوی اصلی می‌شوند).
+
+   **امنیت:** Supabase به‌صورت پیش‌فرض هر جدول schema عمومی را از طریق API و کلید anon
+   در دسترس می‌گذارد. چون این سامانه اصلاً از آن API استفاده نمی‌کند (n8n با اتصال
+   مستقیم Postgres کار می‌کند)، روی هر ۱۲ جدول RLS بدون هیچ policy فعال شد و دسترسی
+   نقش‌های `anon` و `authenticated` پس گرفته شد. نتیجه: API عمومی به هیچ داده‌ای
+   دسترسی ندارد، ولی n8n بدون تغییر کار می‌کند (نقش `postgres` از RLS عبور می‌کند).
+
+   **ساخت credential در n8n:** در داشبورد Supabase دکمه‌ی **Connect** را بزنید و رشته‌ی
+   اتصال **Session pooler** را بردارید (نه Direct connection — اتصال مستقیم روی پلن
+   رایگان فقط IPv6 است و n8n Cloud به آن وصل نمی‌شود). مقادیر را در یک credential از
+   نوع Postgres در n8n بگذارید:
+
+   | فیلد | مقدار |
+   |---|---|
+   | Host | `aws-0-eu-central-1.pooler.supabase.com` (دقیقاً از Connect کپی کنید) |
+   | Database | `postgres` |
+   | User | `postgres.blehwjzrnroryrljklna` |
+   | Password | رمز دیتابیس — از Settings → Database → Reset database password |
+   | Port | `5432` (حالت Session) |
+   | SSL | `require` |
+
+   رمز دیتابیس هنگام ساخت پروژه تولید شده و در دسترس من نبود؛ باید یک بار از داشبورد
+   آن را Reset کنید تا رمز جدید را ببینید.
 ۲. **نودهای HTTP Request** (ارسال پیام تلگرام، اعلان دفتر، پیام‌های SLA) هنگام ساخت
    خودکار credential نگرفتند. در هر کدام باید Authentication را روی
    «Predefined Credential Type» → «Telegram API» بگذارید و credential ربات را انتخاب کنید.
